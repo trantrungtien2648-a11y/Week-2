@@ -1,66 +1,79 @@
-import nltk
+# import necessary libraries
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import nltk 
+import requests
 import re
-import string
-# Download required NLTK resources (run once)
-nltk.download('punkt')
-nltk.download('punkt_tab')
-nltk.download('stopwords')
-nltk.download('wordnet')
-nltk.download('omw-1.4')
 
-from nltk.tokenize import word_tokenize
-from nltk.corpus import stopwords
-from nltk.stem import PorterStemmer, WordNetLemmatizer
+# Install nltk vader lexicon if not already installed
+nltk.download('vader_lexicon')
 
-#Input text
-text = ("Hi my name is Trung Tien, I like Gacha game such as Honkai Star Rail, Fate Grand Oder, Blue Archive."
-        "I also love reading light novel and watching anime during my free time."
+from nltk.sentiment import SentimentIntensityAnalyzer
+
+# Download the dataset from Dropbox
+url = 'https://www.dropbox.com/scl/fi/w937d5gtkztw5ntztphb6/5000tweets.csv?rlkey=e5conogzw61vu2jht733pllai&st=7tdpcegm&dl=1'
+response = requests.get(url)
+with open('5000tweets.csv', 'wb') as flie:
+    flie.write(response.content)
+
+# Load the dataset
+# Display the first few rows of the dataset
+tweets = pd.read_csv('5000tweets.csv')
+
+# Preprocess the data
+tweets['text'] = tweets['text'].str.replace(r'http\S+', '', regex=True)  # Remove URLs
+tweets['text'] = tweets['text'].str.replace(r'@\w+', '', regex=True)  # Remove mentions
+tweets['text'] = tweets['text'].str.replace(r'#\w+', '', regex=True)  # Remove hashtags symbols
+tweets['text'] = tweets['text'].str.lower()  # Convert to lowercase
+
+# Analyze the sentiment
+sia = SentimentIntensityAnalyzer()
+tweets['polarity_score'] = tweets['text'].apply(lambda x: sia.polarity_scores(x)['compound'])
+tweets['sentiment'] = np.where(tweets['polarity_score'] > 0.05, 'positive', np.where(tweets['polarity_score'] < -0.05, 'negative', 'neutral'))
+
+# Visualize the sentiment distribution
+plt.figure(figsize=(10, 6))
+sns.countplot(x='sentiment', data=tweets)
+order = ['positive', 'neutral', 'negative']
+plt.title('Sentiment Distribution of Tweets')
+plt.show()
+
+# Visualize sentiment trend over time (assuming there's a 'timestamp' column in the datetime format)
+if 'timestamp' in tweets.columns:
+    # Pandas can choke on non-standard timezone abbreviations such as "PDT".
+    # We'll try a forgiving conversion that coerces invalid values and
+    # falls back to a simpler parse if needed.
+    try:
+        tweets['timestamp'] = pd.to_datetime(
+            tweets['timestamp'],
+            utc=True, # convert everything to UTC
+            errors='raise'
         )
-print("Original Text:\n", text)
-print("-" * 60)
+    except ValueError:
+        # remove unknown timezone abbreviations before parsing
+        def _clean(ts: str) -> str:
+            # strip out all-caps tokens of 2-4 letters (e.g. "PDT", "EST")
+            return re.sub(r'\b[A-Z]{2,4}\b', '', ts).strip()
+    
+    tweets['timestamp'] = tweets['timestamp'].astype(str).apply(
+        lambda x: pd.to_datetime(_clean(x), utc=True, errors='coerce')
+    )
+# If the column is still not in datetime , coerce silently 
+tweets['timestamp'] = pd.to_datetime(tweets['timestamp'], errors='coerce')
 
-# Tokenization
-tokens = word_tokenize(text)
-print("Tokens:\n", tokens)
-print("-" * 60)
+tweets.set_index('timestamp', inplace=True)
+daily_sentiment = tweets.resample('D').apply(lambda x: x['sentiment'].value_counts(normalize=True)*100)
+daily_sentiment = daily_sentiment.fillna(0).reset_index()
 
-# Lowercasing
-lower_tokens = [token.lower() for token in tokens]
-print("Lowercased Tokens:\n", lower_tokens)
-print("-" * 60)
-
-# Stopword Removal
-stop_words = set(stopwords.words('english'))
-filtered_tokens = [token for token in lower_tokens if token not in stop_words]
-print("Tokens after Stopword Removal:\n", filtered_tokens)
-print("-" * 60)
-
-# Punctuation Removal
-punctuation_table = str.maketrans('', '', string.punctuation)
-punctuation_free_tokens = [token.translate(punctuation_table) for token in filtered_tokens if token.translate(punctuation_table)]
-print("Punctuation-free Tokens:\n", punctuation_free_tokens)
-print("-" * 60)
-
-# Stemming
-stemmer = PorterStemmer()
-stemmed_tokens = [stemmer.stem(token) for token in punctuation_free_tokens]
-print("Stemmed Tokens:\n", stemmed_tokens)
-print("-" * 60)
-
-# Lemmatization
-lemmatizer = WordNetLemmatizer()
-lemmatized_tokens = [lemmatizer.lemmatize(token) for token in punctuation_free_tokens]
-print("Lemmatized Tokens:\n", lemmatized_tokens)
-print("-" * 60)
-
-# Text Normalization Function
-def normalize_text(input_text):
-    tokens = word_tokenize(input_text)
-    lower_tokens = [token.lower() for token in tokens]
-    stop_words = set(stopwords.words('english'))
-    filtered_tokens = [token for token in lower_tokens if token not in stop_words]
-    punctuation_table = str.maketrans('', '', string.punctuation)
-    punctuation_free_tokens = [token.translate(punctuation_table) for token in filtered_tokens if token.translate(punctuation_table)]
-    lemmatizer = WordNetLemmatizer()
-    lemmatized_tokens = [lemmatizer.lemmatize(token) for token in punctuation_free_tokens]
-    return lemmatized_tokens
+# Plotting
+plt.figure(figsize=(12, 6))
+sns.lineplot(x='timestamp', y='positive', data=daily_sentiment, label='Positive')
+sns.lineplot(x='timestamp', y='neutral', data=daily_sentiment, label='Neutral')
+sns.lineplot(x='timestamp', y='negative', data=daily_sentiment, label='Negative')
+plt.title('Daily Sentiment Trend of Tweets')
+plt.xlabel('Date')
+plt.ylabel('Percentage of Tweets')
+plt.legend()
+plt.show()
